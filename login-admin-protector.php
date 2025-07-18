@@ -4,7 +4,7 @@
  * Description: Blocks access to WordPress login and admin pages with exceptions for Jetpack/WordPress.com and Nigeria traffic. Includes IP tracking and caching.
  * Version: 1.0.0
  * Author: Krafty Sprouts Media, LLC
- * Author URI: http://kraftysporuts.com
+ * Author URI: http://kraftysprouts.com
  * License: GPL v2 or later
  * Text Domain: ksm-lapp
  */

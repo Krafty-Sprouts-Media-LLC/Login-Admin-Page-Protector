@@ -54,35 +54,30 @@ class KSM_LAPP_Login_Admin_Protector {
      * Initialize plugin
      */
     public function init() {
-        // CRITICAL FIX: Check access control BEFORE admin menu setup
-        if ($this->should_check_access()) {
+        if ($this->is_login_or_admin_page()) {
             $this->check_access();
         }
         
-        // Add admin menu only if user has access
-        if (is_admin() && current_user_can('manage_options')) {
+        // Add admin menu
+        if (is_admin()) {
             add_action('admin_menu', array($this, 'add_admin_menu'));
             add_action('admin_init', array($this, 'admin_init'));
         }
     }
     
     /**
-     * Determine if we should check access (FIXED LOGIC)
+     * Check if current page is login or admin page
      */
-    private function should_check_access() {
+    private function is_login_or_admin_page() {
         global $pagenow;
         
-        // Always check wp-login.php
+        // Check for login page
         if ($pagenow === 'wp-login.php') {
             return true;
         }
         
-        // For admin pages, only check if user is NOT logged in OR doesn't have proper capabilities
+        // Check for admin pages
         if (is_admin() && !wp_doing_ajax() && !wp_doing_cron()) {
-            // Allow access if user is logged in with proper permissions
-            if (is_user_logged_in() && current_user_can('manage_options')) {
-                return false;
-            }
             return true;
         }
         
@@ -90,22 +85,10 @@ class KSM_LAPP_Login_Admin_Protector {
     }
     
     /**
-     * Main access control logic (IMPROVED)
+     * Main access control logic
      */
     private function check_access() {
         $user_ip = $this->get_user_ip();
-        
-        // FIRST: Check if this is a Jetpack/WordPress.com IP (highest priority)
-        if ($this->is_jetpack_ip($user_ip)) {
-            return;
-        }
-        
-        // SECOND: Check if user is already logged in with proper capabilities
-        if (is_user_logged_in() && current_user_can('manage_options')) {
-            return;
-        }
-        
-        // THIRD: Check country code
         $country_code = $this->get_country_code($user_ip);
         
         // Allow Nigeria traffic
@@ -113,8 +96,13 @@ class KSM_LAPP_Login_Admin_Protector {
             return;
         }
         
-        // FOURTH: Check for other known service IPs
-        if ($this->is_allowed_service_ip($user_ip)) {
+        // Allow Jetpack/WordPress.com IPs
+        if ($this->is_jetpack_ip($user_ip)) {
+            return;
+        }
+        
+        // Allow logged-in users with proper capabilities
+        if (is_user_logged_in() && current_user_can('manage_options')) {
             return;
         }
         
@@ -124,59 +112,24 @@ class KSM_LAPP_Login_Admin_Protector {
     }
     
     /**
-     * Check for other known service IPs that need admin access
-     */
-    private function is_allowed_service_ip($ip) {
-        // Common backup and monitoring service IPs
-        $service_ips = array(
-            // UpdraftPlus/UpdraftCentral
-            '34.197.0.0/16',
-            '52.0.0.0/11',
-            
-            // Wordfence
-            '199.87.228.66/32',
-            '146.88.240.0/20',
-            
-            // Add more as needed
-        );
-        
-        foreach ($service_ips as $range) {
-            if ($this->ip_in_range($ip, $range)) {
-                return true;
-            }
-        }
-        
-        return false;
-    }
-    
-    /**
-     * Get user's real IP address (IMPROVED)
+     * Get user's real IP address - IMPROVED to handle mobile/proxy scenarios
      */
     private function get_user_ip() {
-        // Check for Cloudflare first
-        if (!empty($_SERVER['HTTP_CF_CONNECTING_IP'])) {
-            $ip = $_SERVER['HTTP_CF_CONNECTING_IP'];
-            if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE)) {
-                return $ip;
-            }
-        }
-        
-        $ip_keys = array(
-            'HTTP_CLIENT_IP', 
-            'HTTP_X_FORWARDED_FOR', 
-            'HTTP_X_FORWARDED', 
-            'HTTP_X_CLUSTER_CLIENT_IP', 
-            'HTTP_FORWARDED_FOR', 
-            'HTTP_FORWARDED', 
-            'HTTP_X_REAL_IP',
-            'REMOTE_ADDR'
-        );
+        $ip_keys = array('HTTP_CLIENT_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_FORWARDED', 
+                        'HTTP_X_CLUSTER_CLIENT_IP', 'HTTP_FORWARDED_FOR', 'HTTP_FORWARDED', 
+                        'REMOTE_ADDR');
         
         foreach ($ip_keys as $key) {
             if (array_key_exists($key, $_SERVER) === true) {
                 foreach (explode(',', $_SERVER[$key]) as $ip) {
                     $ip = trim($ip);
-                    if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) !== false) {
+                    
+                    // Only validate IP format - allow private ranges for mobile/proxy scenarios
+                    if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
+                        // Log the IP source for debugging (only if WP_DEBUG is enabled)
+                        if (defined('WP_DEBUG') && WP_DEBUG) {
+                            error_log("KSM_LAPP: Using IP {$ip} from {$key}");
+                        }
                         return $ip;
                     }
                 }
@@ -198,7 +151,7 @@ class KSM_LAPP_Login_Admin_Protector {
             $country_code = $this->get_country_from_local_ranges($ip);
             
             // If not found locally, try external API as fallback
-            if ($country_code === 'UNKNOWN' && get_option('ksm_lapp_use_external_api', false)) {
+            if ($country_code === 'UNKNOWN') {
                 $country_code = $this->fetch_country_code_external($ip);
             }
             
@@ -209,54 +162,47 @@ class KSM_LAPP_Login_Admin_Protector {
     }
     
     /**
-     * Get country code from local IP ranges (Nigeria focus) - EXPANDED
+     * Get country code from local IP ranges (Nigeria focus) - ENHANCED ranges
      */
     private function get_country_from_local_ranges($ip) {
-        // Expanded Nigeria IP ranges
+        // Nigeria IP ranges - EXPANDED and organized by provider
         $nigeria_ranges = array(
-            // Major Nigerian ISP blocks
-            '41.58.0.0/16',        // MTN Nigeria
-            '41.75.0.0/16',        // Airtel Nigeria
-            '41.76.0.0/16',        // Airtel Nigeria  
-            '41.77.0.0/16',        // Airtel Nigeria
-            '41.78.0.0/16',        // Airtel Nigeria
-            '41.79.0.0/16',        // Airtel Nigeria
-            '41.184.0.0/16',       // Various Nigerian ISPs
-            '41.190.0.0/16',       // Various Nigerian ISPs
-            '41.203.0.0/16',       // Various Nigerian ISPs
-            '41.210.0.0/16',       // Various Nigerian ISPs
-            '41.211.0.0/16',       // Various Nigerian ISPs
-            '41.212.0.0/16',       // Various Nigerian ISPs
-            '41.213.0.0/16',       // Various Nigerian ISPs
-            '41.214.0.0/16',       // Various Nigerian ISPs
-            '41.215.0.0/16',       // Various Nigerian ISPs
-            '41.216.0.0/16',       // Various Nigerian ISPs
-            '41.217.0.0/16',       // Various Nigerian ISPs
-            '41.218.0.0/16',       // Various Nigerian ISPs
-            '41.219.0.0/16',       // Various Nigerian ISPs
-            '41.220.0.0/16',       // Various Nigerian ISPs
-            '41.221.0.0/16',       // Various Nigerian ISPs
-            '41.222.0.0/16',       // Various Nigerian ISPs
-            '41.223.0.0/16',       // Various Nigerian ISPs
-            '105.112.0.0/12',      // Nigeria block
-            '154.113.0.0/16',      // Nigeria block
-            '196.1.0.0/16',        // Nigeria block
-            '196.6.0.0/16',        // Nigeria block
-            '196.13.0.0/16',       // Nigeria block
-            '196.27.0.0/16',       // Nigeria block
-            '196.28.0.0/16',       // Nigeria block
-            '196.29.0.0/16',       // Nigeria block
-            '196.46.0.0/16',       // Nigeria block
-            '196.49.0.0/16',       // Nigeria block
-            '196.200.0.0/13',      // Large Nigeria block (196.200.0.0 - 196.207.255.255)
-            '196.208.0.0/13',      // Large Nigeria block (196.208.0.0 - 196.215.255.255)
-            '196.216.0.0/13',      // Large Nigeria block (196.216.0.0 - 196.223.255.255)
+            // MTN Nigeria
+            '41.58.0.0/16', '41.75.0.0/16', '105.112.0.0/12',
             
-            // Additional common Nigerian ISP ranges
-            '169.239.0.0/16',      // MainOne
-            '41.242.0.0/16',       // Swift Networks
-            '197.255.0.0/16',      // Phase3 Telecom
-            '160.152.0.0/16',      // OADC Networks
+            // Airtel Nigeria  
+            '41.76.0.0/16', '41.77.0.0/16', '41.78.0.0/16', '41.79.0.0/16',
+            
+            // Glo Nigeria
+            '154.113.0.0/16', '41.203.0.0/16', '41.184.0.0/16',
+            
+            // 9mobile (Etisalat Nigeria)
+            '41.190.0.0/16', '196.6.0.0/16',
+            
+            // Major ISP blocks
+            '196.1.0.0/16', '196.13.0.0/16', '196.27.0.0/16', '196.28.0.0/16',
+            '196.29.0.0/16', '196.46.0.0/16', '196.49.0.0/16',
+            
+            // Internet Exchange and backbone providers
+            '196.200.0.0/13', // 196.200.0.0 to 196.207.255.255
+            '196.208.0.0/12', // 196.208.0.0 to 196.223.255.255
+            
+            // NITEL and other providers
+            '41.210.0.0/15', // 41.210.0.0 to 41.211.255.255
+            '41.212.0.0/14', // 41.212.0.0 to 41.215.255.255
+            '41.216.0.0/13', // 41.216.0.0 to 41.223.255.255
+            
+            // Additional Nigerian blocks
+            '165.73.0.0/16', '165.88.0.0/16', '165.255.0.0/16',
+            '197.149.0.0/16', '197.210.0.0/16', '197.242.0.0/16',
+            '197.253.0.0/16', '197.255.0.0/16',
+            
+            // Mobile carrier additional ranges
+            '169.239.0.0/16', // Additional MTN
+            '41.139.0.0/16',  // Additional Airtel
+            '105.235.0.0/16', // Mobile carriers
+            '102.89.0.0/16',  // Internet providers
+            '102.91.0.0/16',  // Internet providers
         );
         
         foreach ($nigeria_ranges as $range) {
@@ -269,22 +215,51 @@ class KSM_LAPP_Login_Admin_Protector {
     }
     
     /**
-     * Fetch country code from external API (fallback only)
+     * Fetch country code from external API (fallback only) - IMPROVED error handling
      */
     private function fetch_country_code_external($ip) {
+        // Only use external API if specifically enabled
+        if (!get_option('ksm_lapp_use_external_api', false)) {
+            return 'UNKNOWN';
+        }
+        
+        // Skip private/local IPs for external API calls
+        if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE) === false) {
+            return 'UNKNOWN';
+        }
+        
         $url = "http://ipinfo.io/{$ip}/country";
         
         $response = wp_remote_get($url, array(
-            'timeout' => 5,
-            'user-agent' => 'KSM-LAPP-Plugin/' . KSM_LAPP_VERSION
+            'timeout' => 3,
+            'user-agent' => 'KSM-LAPP-Plugin/' . KSM_LAPP_VERSION,
+            'headers' => array('Accept' => 'text/plain')
         ));
         
         if (is_wp_error($response)) {
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log('KSM_LAPP: External API error: ' . $response->get_error_message());
+            }
+            return 'UNKNOWN';
+        }
+        
+        $response_code = wp_remote_retrieve_response_code($response);
+        if ($response_code !== 200) {
+            if (defined('WP_DEBUG') && WP_DEBUG) {
+                error_log('KSM_LAPP: External API returned code: ' . $response_code);
+            }
             return 'UNKNOWN';
         }
         
         $body = wp_remote_retrieve_body($response);
-        return trim($body) ?: 'UNKNOWN';
+        $country_code = trim($body);
+        
+        // Validate country code format (should be 2 letters)
+        if (strlen($country_code) === 2 && ctype_alpha($country_code)) {
+            return strtoupper($country_code);
+        }
+        
+        return 'UNKNOWN';
     }
     
     /**
@@ -330,7 +305,12 @@ class KSM_LAPP_Login_Admin_Protector {
             'country_code' => $country_code,
             'user_agent' => $_SERVER['HTTP_USER_AGENT'] ?? '',
             'request_uri' => $_SERVER['REQUEST_URI'] ?? '',
-            'attempt_time' => current_time('mysql')
+            'attempt_time' => current_time('mysql'),
+            'server_vars' => array(
+                'HTTP_X_FORWARDED_FOR' => $_SERVER['HTTP_X_FORWARDED_FOR'] ?? '',
+                'HTTP_CLIENT_IP' => $_SERVER['HTTP_CLIENT_IP'] ?? '',
+                'REMOTE_ADDR' => $_SERVER['REMOTE_ADDR'] ?? ''
+            )
         );
         
         // Get existing logs
@@ -356,28 +336,19 @@ class KSM_LAPP_Login_Admin_Protector {
 <html>
 <head>
     <title>Access Denied</title>
-    <meta charset="UTF-8">
+    <meta name="robots" content="noindex,nofollow">
     <style>
-        body { 
-            font-family: Arial, sans-serif; 
-            text-align: center; 
-            margin-top: 50px; 
-            background-color: #f5f5f5;
-        }
-        .error { 
-            color: #d32f2f; 
-            background: white;
-            padding: 20px;
-            border-radius: 8px;
-            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
-            display: inline-block;
-        }
+        body { font-family: Arial, sans-serif; text-align: center; margin-top: 50px; background: #f1f1f1; }
+        .container { max-width: 600px; margin: 0 auto; background: white; padding: 40px; border-radius: 5px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .error { color: #d32f2f; font-size: 24px; margin-bottom: 20px; }
+        p { color: #666; line-height: 1.6; }
     </style>
 </head>
 <body>
-    <div class="error">
-        <h1>Access Denied</h1>
+    <div class="container">
+        <h1 class="error">Access Denied</h1>
         <p>You do not have permission to access this page.</p>
+        <p>This site restricts access to login and admin areas based on geographic location for security purposes.</p>
         <p>If you believe this is an error, please contact the site administrator.</p>
     </div>
 </body>
@@ -409,7 +380,7 @@ class KSM_LAPP_Login_Admin_Protector {
     }
     
     /**
-     * Plugin deactivation
+     * Plugin deactivation - IMPROVED cleanup
      */
     public function deactivate() {
         // Clean up transients
@@ -421,7 +392,7 @@ class KSM_LAPP_Login_Admin_Protector {
     }
     
     /**
-     * Plugin uninstall (COMPLETE CLEANUP)
+     * Plugin uninstall - COMPLETE cleanup
      */
     public static function uninstall() {
         // Remove all plugin options
@@ -446,7 +417,7 @@ class KSM_LAPP_Login_Admin_Protector {
     private function set_default_options() {
         add_option('ksm_lapp_cache_duration', 3600);
         add_option('ksm_lapp_cleanup_days', 30);
-        add_option('ksm_lapp_use_external_api', false);
+        add_option('ksm_lapp_use_external_api', false); // Disabled by default
         add_option($this->log_option_name, array());
     }
     
@@ -475,21 +446,25 @@ class KSM_LAPP_Login_Admin_Protector {
     }
     
     /**
-     * Admin page HTML (IMPROVED WITH DEBUG INFO)
+     * Admin page HTML - ENHANCED with debugging info
      */
     public function admin_page() {
+        // Get current user's IP for testing
         $current_ip = $this->get_user_ip();
-        $country_code = $this->get_country_code($current_ip);
+        $current_country = $this->get_country_code($current_ip);
         ?>
         <div class="wrap">
-            <h1>Login/Admin Page Protector Settings</h1>
+            <h1>Login/Admin Page Protector Settings <small>v<?php echo KSM_LAPP_VERSION; ?></small></h1>
             
-            <!-- DEBUG INFORMATION -->
+            <!-- Current Status -->
             <div class="notice notice-info">
-                <p><strong>Current Status:</strong></p>
-                <p><strong>Your IP:</strong> <?php echo esc_html($current_ip); ?></p>
-                <p><strong>Detected Country:</strong> <?php echo esc_html($country_code); ?></p>
-                <p><strong>Jetpack IP:</strong> <?php echo $this->is_jetpack_ip($current_ip) ? 'Yes' : 'No'; ?></p>
+                <p><strong>Your Current Status:</strong><br>
+                IP Address: <code><?php echo esc_html($current_ip); ?></code><br>
+                Detected Country: <code><?php echo esc_html($current_country); ?></code><br>
+                Access Status: <?php echo ($current_country === 'NG' || $this->is_jetpack_ip($current_ip)) ? 
+                    '<span style="color:green;">✓ ALLOWED</span>' : 
+                    '<span style="color:red;">✗ WOULD BE BLOCKED</span>'; ?>
+                </p>
             </div>
             
             <form method="post" action="options.php">
@@ -526,30 +501,32 @@ class KSM_LAPP_Login_Admin_Protector {
                 <?php submit_button(); ?>
             </form>
             
+            <!-- Clear Cache Button -->
+            <form method="post" style="margin-top: 20px;">
+                <p>
+                    <input type="submit" name="clear_cache" class="button" value="Clear IP Cache" />
+                    <span class="description">Clear all cached IP geolocation data</span>
+                </p>
+            </form>
+            
+            <?php
+            // Handle cache clearing
+            if (isset($_POST['clear_cache'])) {
+                global $wpdb;
+                $deleted = $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name LIKE %s", '_transient_' . $this->cache_key_prefix . 'country_%'));
+                $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name LIKE %s", '_transient_timeout_' . $this->cache_key_prefix . 'country_%'));
+                echo '<div class="notice notice-success"><p>Cache cleared! Removed ' . intval($deleted) . ' cached entries.</p></div>';
+            }
+            ?>
+            
             <h2>Recent Blocked Attempts</h2>
             <?php $this->display_blocked_attempts(); ?>
-            
-            <!-- EMERGENCY ACCESS BUTTON -->
-            <h2>Emergency Actions</h2>
-            <p>
-                <button type="button" class="button button-secondary" onclick="if(confirm('Are you sure? This will clear all IP caches.')) { window.location.href='<?php echo wp_nonce_url(admin_url('options-general.php?page=ksm-lapp-settings&action=clear_cache'), 'clear_cache'); ?>'; }">
-                    Clear IP Cache
-                </button>
-            </p>
-            
         </div>
         <?php
-        
-        // Handle cache clearing
-        if (isset($_GET['action']) && $_GET['action'] === 'clear_cache' && wp_verify_nonce($_GET['_wpnonce'], 'clear_cache')) {
-            global $wpdb;
-            $wpdb->query($wpdb->prepare("DELETE FROM {$wpdb->options} WHERE option_name LIKE %s", '_transient_' . $this->cache_key_prefix . '%'));
-            echo '<div class="notice notice-success"><p>Cache cleared successfully!</p></div>';
-        }
     }
     
     /**
-     * Display blocked attempts table
+     * Display blocked attempts table - ENHANCED with more details
      */
     private function display_blocked_attempts() {
         $attempts = get_option($this->log_option_name, array());
@@ -563,7 +540,7 @@ class KSM_LAPP_Login_Admin_Protector {
         $recent_attempts = array_slice($attempts, 0, 50);
         
         echo '<table class="wp-list-table widefat fixed striped">';
-        echo '<thead><tr><th>IP Address</th><th>Country</th><th>User Agent</th><th>Request URI</th><th>Time</th></tr></thead>';
+        echo '<thead><tr><th>IP Address</th><th>Country</th><th>User Agent</th><th>Request URI</th><th>Proxy Info</th><th>Time</th></tr></thead>';
         echo '<tbody>';
         
         foreach ($recent_attempts as $attempt) {
@@ -572,6 +549,21 @@ class KSM_LAPP_Login_Admin_Protector {
             echo '<td>' . esc_html($attempt['country_code']) . '</td>';
             echo '<td>' . esc_html(substr($attempt['user_agent'], 0, 50)) . '...</td>';
             echo '<td>' . esc_html($attempt['request_uri']) . '</td>';
+            
+            // Show proxy information if available
+            $proxy_info = '';
+            if (isset($attempt['server_vars'])) {
+                $vars = $attempt['server_vars'];
+                if (!empty($vars['HTTP_X_FORWARDED_FOR'])) {
+                    $proxy_info .= 'X-Forwarded: ' . esc_html($vars['HTTP_X_FORWARDED_FOR']) . '<br>';
+                }
+                if (!empty($vars['HTTP_CLIENT_IP'])) {
+                    $proxy_info .= 'Client-IP: ' . esc_html($vars['HTTP_CLIENT_IP']) . '<br>';
+                }
+                $proxy_info .= 'Remote: ' . esc_html($vars['REMOTE_ADDR']);
+            }
+            echo '<td>' . $proxy_info . '</td>';
+            
             echo '<td>' . esc_html($attempt['attempt_time']) . '</td>';
             echo '</tr>';
         }

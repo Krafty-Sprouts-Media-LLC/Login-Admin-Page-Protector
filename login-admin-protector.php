@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Login/Admin Page Protector
  * Description: Blocks access to WordPress login and admin pages with exceptions for Jetpack/WordPress.com and Nigeria traffic. Includes IP tracking and caching.
- * Version: 1.2.0
+ * Version: 1.2.1
  * Author: Krafty Sprouts Media, LLC
  * Author URI: http://kraftysprouts.com
  * License: GPL v2 or later
@@ -15,7 +15,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('KSM_LAPP_VERSION', '1.2.0');
+define('KSM_LAPP_VERSION', '1.2.1');
 define('KSM_LAPP_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('KSM_LAPP_PLUGIN_URL', plugin_dir_url(__FILE__));
 
@@ -216,21 +216,18 @@ class KSM_LAPP_Login_Admin_Protector {
     }
     
     /**
-     * Get user's real IP address - IMPROVED with rate limiting protection
+     * Get user's real IP address
      */
     private function get_user_ip() {
-        // Check for rate limiting attacks
-        $this->check_rate_limiting();
-        
-        $ip_keys = array('HTTP_CLIENT_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_FORWARDED', 
-                        'HTTP_X_CLUSTER_CLIENT_IP', 'HTTP_FORWARDED_FOR', 'HTTP_FORWARDED', 
+        $ip_keys = array('HTTP_CLIENT_IP', 'HTTP_X_FORWARDED_FOR', 'HTTP_X_FORWARDED',
+                        'HTTP_X_CLUSTER_CLIENT_IP', 'HTTP_FORWARDED_FOR', 'HTTP_FORWARDED',
                         'REMOTE_ADDR');
-        
+
         foreach ($ip_keys as $key) {
             if (array_key_exists($key, $_SERVER) === true) {
                 foreach (explode(',', $_SERVER[$key]) as $ip) {
                     $ip = trim($ip);
-                    
+
                     // Validate and sanitize IP
                     if (filter_var($ip, FILTER_VALIDATE_IP, FILTER_FLAG_IPV4) !== false) {
                         // Additional security: Check for suspicious patterns
@@ -241,7 +238,7 @@ class KSM_LAPP_Login_Admin_Protector {
                 }
             }
         }
-        
+
         return $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
     }
     
@@ -256,27 +253,10 @@ class KSM_LAPP_Login_Admin_Protector {
             '127.0.0.1',
             '::1'
         );
-        
+
         return in_array($ip, $suspicious_patterns);
     }
-    
-    /**
-     * Simple rate limiting to prevent abuse
-     */
-    private function check_rate_limiting() {
-        $user_ip = $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1';
-        $rate_limit_key = 'ksm_lapp_rate_' . md5($user_ip);
-        $current_count = get_transient($rate_limit_key) ?: 0;
-        
-        // Allow 10 requests per minute
-        if ($current_count >= 10) {
-            status_header(429);
-            exit('Rate limit exceeded');
-        }
-        
-        set_transient($rate_limit_key, $current_count + 1, 60);
-    }
-    
+
     /**
      * Get country code from IP with enhanced caching
      */

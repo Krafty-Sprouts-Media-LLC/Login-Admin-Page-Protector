@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Login/Admin Page Protector
  * Description: Blocks access to WordPress login and admin pages with exceptions for Jetpack/WordPress.com and Nigeria traffic. Includes IP tracking and caching.
- * Version: 1.2.0
+ * Version: 1.2.1
  * Author: Krafty Sprouts Media, LLC
  * Author URI: http://kraftysprouts.com
  * License: GPL v2 or later
@@ -15,7 +15,7 @@ if (!defined('ABSPATH')) {
 }
 
 // Define plugin constants
-define('KSM_LAPP_VERSION', '1.2.0');
+define('KSM_LAPP_VERSION', '1.2.1');
 define('KSM_LAPP_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('KSM_LAPP_PLUGIN_URL', plugin_dir_url(__FILE__));
 

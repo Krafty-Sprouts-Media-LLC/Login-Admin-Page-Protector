@@ -187,10 +187,23 @@ The plugin currently doesn't expose public filters, but can be extended by modif
 For support, feature requests, or bug reports:
 - **Author**: Krafty Sprouts Media, LLC
 - **Website**: http://kraftysporuts.com
-- **Version**: 1.0.0
+- **Version**: 1.2.1
 - **License**: GPL v2 or later
 
 ## Changelog
+
+### Version 1.2.1
+- Removed admin rate limiting functionality
+- Eliminated 10 requests per minute restriction
+- Improved admin access performance
+
+### Version 1.2.0
+- Enhanced IP whitelist management
+- Added emergency bypass functionality
+- Improved blocked attempts logging
+- Added AJAX handlers for whitelist operations
+- Enhanced security monitoring
+- Expanded Nigeria IP ranges
 
 ### Version 1.0.0
 - Initial release
